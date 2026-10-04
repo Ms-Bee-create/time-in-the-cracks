@@ -450,6 +450,16 @@
     background:var(--bg);color:var(--text);font:inherit;font-size:0.92rem;
   }
   .field .hint{font-size:0.72rem;color:var(--text-dim);margin-top:5px;}
+  .auth-gate{position:fixed;inset:0;z-index:3000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:16px;}
+  .auth-gate[hidden]{display:none;}
+  .auth-card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:24px;}
+  .auth-card h2{margin:0 0 6px;font-size:1.25rem;color:var(--sage-dark);}
+  .auth-card .auth-sub{margin:0 0 18px;font-size:0.85rem;color:var(--text-dim);}
+  .auth-card .field{margin-bottom:14px;}
+  .auth-card input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--bg);color:var(--text);font:inherit;font-size:0.92rem;box-sizing:border-box;}
+  .auth-card .auth-error{min-height:1.2em;font-size:0.8rem;color:var(--danger);margin:4px 0 10px;}
+  .auth-card button{width:100%;}
+  .auth-card .secondary-btn{margin-top:10px;padding:12px;border-radius:12px;border:1px solid var(--border);background:none;color:var(--sage-dark);font:inherit;font-size:0.9rem;cursor:pointer;}
   .word-count{font-size:0.72rem;color:var(--text-dim);text-align:right;margin-top:4px;}
   .word-count.over{color:var(--danger);}
 
@@ -578,6 +588,24 @@
 </div>
 
 <div class="overlay" id="overlay"></div>
+
+<div class="auth-gate" id="authGate" hidden>
+  <form class="auth-card" id="authForm" autocomplete="on">
+    <h2 id="authTitle">Sign in to Cracks</h2>
+    <p class="auth-sub">Use the same login as Momma Money on any device.</p>
+    <div class="field">
+      <label for="authEmail">Email</label>
+      <input id="authEmail" type="email" autocomplete="email" required />
+    </div>
+    <div class="field">
+      <label for="authPassword">Password</label>
+      <input id="authPassword" type="password" autocomplete="current-password" minlength="6" required />
+    </div>
+    <div class="auth-error" id="authError" role="alert"></div>
+    <button type="submit" class="generate-btn" id="authSubmit">Sign in</button>
+    <button type="button" class="secondary-btn" id="authToggle">New here? Create an account</button>
+  </form>
+</div>
 
 <aside class="drawer" id="drawer" aria-hidden="true">
   <div class="drawer-header">
@@ -751,11 +779,12 @@
   "use strict";
 
   // ===========================================================================
-  // Supabase — anonymous auth so there's no login screen, just a persistent
-  // per-device identity. Falls back to localStorage-only if init/network fails.
+  // Supabase — shared Momma Money project (fbrnxuargsilbyyjrjop). Cracks tables
+  // are prefixed ck_*. Email/password sign-in; the same login works on the other
+  // family apps on this project. Falls back to localStorage-only if the network fails.
   // ===========================================================================
-  const SUPABASE_URL = "https://fleesypesnbguobjkszd.supabase.co";
-  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZsZWVzeXBlc25iZ3VvYmprc3pkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0Njk5NjMsImV4cCI6MjEwNTA0NTk2M30.pZxTGYuXIjZFDiss4s8H6wOY-GIYA4l8pdwq_L49e1M";
+  const SUPABASE_URL = "https://fbrnxuargsilbyyjrjop.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZicm54dWFyZ3NpbGJ5eWpyam9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1MDkxMDksImV4cCI6MjEwNTA4NTEwOX0.ycBWWu9U5H-KcZWdGGzFonGXxiSvlkDOYdCN_xtC47o";
 
   let supa = null;
   let userId = null;
@@ -767,14 +796,60 @@
     setTimeout(() => t.classList.remove("show"), 3000);
   }
 
+  // Blocks until someone signs in or creates an account on the gate screen.
+  function requireSignIn(){
+    const gate = document.getElementById("authGate");
+    const form = document.getElementById("authForm");
+    const err = document.getElementById("authError");
+    const submit = document.getElementById("authSubmit");
+    const toggle = document.getElementById("authToggle");
+    const title = document.getElementById("authTitle");
+    let creating = false;
+    gate.hidden = false;
+    return new Promise((resolve) => {
+      function setMode(isCreate){
+        creating = isCreate;
+        title.textContent = creating ? "Create your Cracks account" : "Sign in to Cracks";
+        submit.textContent = creating ? "Create account" : "Sign in";
+        toggle.textContent = creating ? "Already have an account? Sign in" : "New here? Create an account";
+        err.textContent = "";
+      }
+      toggle.onclick = () => setMode(!creating);
+      form.onsubmit = async (ev) => {
+        ev.preventDefault();
+        err.textContent = "";
+        submit.disabled = true;
+        const email = document.getElementById("authEmail").value.trim();
+        const password = document.getElementById("authPassword").value;
+        try{
+          const res = creating
+            ? await supa.auth.signUp({ email, password })
+            : await supa.auth.signInWithPassword({ email, password });
+          if(res.error) throw res.error;
+          if(res.data.session){
+            gate.hidden = true;
+            resolve(res.data.session);
+          }else{
+            // Only happens if "Confirm email" is turned on in Supabase Auth.
+            err.textContent = "Account created. Check your email to confirm, then sign in.";
+            setMode(false);
+          }
+        }catch(e){
+          err.textContent = e.message || "Sign-in failed. Try again.";
+        }finally{
+          submit.disabled = false;
+        }
+      };
+      setMode(false);
+    });
+  }
+
   async function initSupabase(){
     try{
       supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       let { data: { session } } = await supa.auth.getSession();
       if(!session){
-        const { data, error } = await supa.auth.signInAnonymously();
-        if(error) throw error;
-        session = data.session;
+        session = await requireSignIn();
       }
       userId = session.user.id;
       remoteReady = true;
@@ -788,10 +863,10 @@
   async function fetchRemoteState(){
     const result = { roles: null, tasks: [], scriptTemplates: {}, kids: null, projects: null };
     const [{ data: profile }, { data: tasks }, { data: templates }, { data: projects }] = await Promise.all([
-      supa.from("profiles").select("role_type, active_roles, homeschool_kids").eq("id", userId).maybeSingle(),
-      supa.from("tasks").select("*").eq("user_id", userId).eq("status", "open").order("priority").order("created_at"),
-      supa.from("script_templates").select("role_type, body").eq("user_id", userId),
-      supa.from("projects").select("*").eq("user_id", userId).order("created_at")
+      supa.from("ck_profiles").select("role_type, active_roles, homeschool_kids").eq("id", userId).maybeSingle(),
+      supa.from("ck_tasks").select("*").eq("user_id", userId).eq("status", "open").order("priority").order("created_at"),
+      supa.from("ck_script_templates").select("role_type, body").eq("user_id", userId),
+      supa.from("ck_projects").select("*").eq("user_id", userId).order("created_at")
     ]);
     if(profile){
       // active_roles is the source of truth once the schema patch is applied;
@@ -823,7 +898,7 @@
   async function remoteInsertTask(task){
     if(!remoteReady) return;
     try{
-      await supa.from("tasks").insert({
+      await supa.from("ck_tasks").insert({
         id: task.id, user_id: userId, title: task.title, raw_input: task.raw || null,
         duration_bucket: task.durationBucket, energy_type: task.energyType,
         task_type: task.taskType, role_tag: task.roleTag || null,
@@ -836,7 +911,7 @@
 
   async function remoteUpdateTask(id, fields){
     if(!remoteReady) return;
-    try{ await supa.from("tasks").update(fields).eq("id", id).eq("user_id", userId); }
+    try{ await supa.from("ck_tasks").update(fields).eq("id", id).eq("user_id", userId); }
     catch(e){ console.warn("update task failed", e); }
   }
 
@@ -846,20 +921,20 @@
       // role_type stays as the "primary" hat for backward-compat script-template
       // lookups; active_roles carries the full multi-select. Run the schema
       // patch (active_roles column) once before this will persist correctly.
-      await supa.from("profiles").update({ role_type: roles[0], active_roles: roles }).eq("id", userId);
+      await supa.from("ck_profiles").update({ role_type: roles[0], active_roles: roles }).eq("id", userId);
     }catch(e){ console.warn("update roles failed", e); }
   }
 
   async function remoteSaveKids(kids){
     if(!remoteReady) return;
-    try{ await supa.from("profiles").update({ homeschool_kids: kids }).eq("id", userId); }
+    try{ await supa.from("ck_profiles").update({ homeschool_kids: kids }).eq("id", userId); }
     catch(e){ console.warn("save kids failed", e); }
   }
 
   async function remoteFetchProjects(){
     if(!remoteReady) return null;
     try{
-      const { data, error } = await supa.from("projects").select("*").eq("user_id", userId).order("created_at");
+      const { data, error } = await supa.from("ck_projects").select("*").eq("user_id", userId).order("created_at");
       if(error) throw error;
       return data.map(p => ({
         id: p.id, name: p.name, clientName: p.client_name, color: p.color,
@@ -871,7 +946,7 @@
   async function remoteUpsertProject(project){
     if(!remoteReady) return;
     try{
-      await supa.from("projects").upsert({
+      await supa.from("ck_projects").upsert({
         id: project.id, user_id: userId, name: project.name, client_name: project.clientName || null,
         color: project.color, hourly_rate: project.rate || null, keywords: project.keywords || [],
         archived: !!project.archived
@@ -881,14 +956,14 @@
 
   async function remoteSetTaskProject(taskId, projectId){
     if(!remoteReady || !taskId || !UUID_RE.test(taskId)) return;
-    try{ await supa.from("tasks").update({ project_id: projectId }).eq("id", taskId).eq("user_id", userId); }
+    try{ await supa.from("ck_tasks").update({ project_id: projectId }).eq("id", taskId).eq("user_id", userId); }
     catch(e){ console.warn("set task project failed", e); }
   }
 
   async function remoteSaveTemplate(role, body){
     if(!remoteReady) return;
     try{
-      await supa.from("script_templates")
+      await supa.from("ck_script_templates")
         .upsert({ user_id: userId, role_type: role, body, updated_at: new Date().toISOString() },
                  { onConflict: "user_id,role_type" });
     }catch(e){ console.warn("save template failed", e); }
@@ -897,7 +972,7 @@
   async function remoteInsertCallScript(goal, script, targetSeconds, taskId){
     if(!remoteReady) return;
     try{
-      await supa.from("call_scripts").insert({
+      await supa.from("ck_call_scripts").insert({
         user_id: userId, task_id: taskId || null, goal_prompt: goal,
         script_text: script, target_seconds: targetSeconds
       });
@@ -914,7 +989,7 @@
       // so send null instead of erroring the whole insert on those.
       const taskId = entry.taskId && UUID_RE.test(entry.taskId) ? entry.taskId : null;
       const projectId = entry.projectId && UUID_RE.test(entry.projectId) ? entry.projectId : null;
-      const { error } = await supa.from("time_entries").insert({
+      const { error } = await supa.from("ck_time_entries").insert({
         id: entry.id, user_id: userId, task_id: taskId, title: entry.title,
         role_tag: entry.roleTag || null,
         project_id: projectId, project_name: entry.projectName || null, rate: entry.rate,
@@ -929,7 +1004,7 @@
   async function remoteFetchTimeEntries(fromMs, toMs){
     if(!remoteReady) return null;
     try{
-      const { data, error } = await supa.from("time_entries")
+      const { data, error } = await supa.from("ck_time_entries")
         .select("*").eq("user_id", userId)
         .gte("started_at", new Date(fromMs).toISOString())
         .lte("started_at", new Date(toMs).toISOString())
