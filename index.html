@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#7c9473" />
 <title>The Cracks App</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<link rel="icon" type="image/png" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
 <style>
   :root{
     /* Sage / cream / terracotta system */
@@ -516,6 +521,17 @@
   .roadmap h4{margin:0 0 8px;color:var(--text);font-size:0.85rem;}
   .roadmap ul{margin:0;padding-left:18px;}
   .roadmap li{margin-bottom:4px;}
+  .today-card{background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:14px 16px;margin:14px 0 18px;}
+  .today-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;font-weight:700;font-size:1rem;}
+  .today-count{font-size:0.78rem;color:var(--text-dim);font-weight:600;}
+  .today-row{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--border);}
+  .today-row:first-of-type{border-top:none;}
+  .today-check{width:26px;height:26px;border-radius:8px;border:2px solid var(--sage);background:none;flex:none;cursor:pointer;margin-top:1px;}
+  .today-check:active{background:var(--sage-light);}
+  .today-body{flex:1;min-width:0;}
+  .today-title{font-weight:700;font-size:0.95rem;}
+  .today-sub{font-size:0.78rem;color:var(--text-dim);margin-top:2px;}
+  .today-row.late .today-sub{color:var(--danger);font-weight:600;}
 </style>
 </head>
 <body>
@@ -550,6 +566,8 @@
       </div>
     </div>
   </div>
+
+  <div class="today-card" id="todayArea" hidden></div>
 
   <!-- Feature A: Crack Picker -->
   <div class="picker-title">I have...</div>
@@ -881,6 +899,7 @@
         id: t.id, title: t.title, durationBucket: t.duration_bucket,
         energyType: t.energy_type, taskType: t.task_type, roleTag: t.role_tag || null,
         projectId: t.project_id || null,
+        dueDate: t.due_date || null, repeat: t.repeat_rule || null,
         status: t.status, priority: t.priority, source: t.source,
         createdAt: new Date(t.created_at).getTime()
       }));
@@ -904,7 +923,8 @@
         task_type: task.taskType, role_tag: task.roleTag || null,
         project_id: task.projectId || null,
         status: task.status, priority: task.priority,
-        source: task.source || "manual"
+        source: task.source || "manual",
+        due_date: task.dueDate || null, repeat_rule: task.repeat || null
       });
     }catch(e){ console.warn("insert task failed", e); }
   }
@@ -1471,8 +1491,147 @@
       else if(energyType === "focus") durationBucket = "45";
     }
 
-    const title = cleanTitle(text);
-    return { taskType, energyType, durationBucket, title, raw: text, roleTagged, roleKey };
+    const sched = parseSchedule(text);
+    const title = cleanTitle(sched.rest);
+    return { taskType, energyType, durationBucket, title, raw: text, roleTagged, roleKey, dueDate: sched.dueDate, repeat: sched.repeat };
+  }
+
+  // ===========================================================================
+  // Due dates + repeats, read straight from the brain-dump text:
+  //   "tomorrow", "today", "Tuesday", "every day", "every Tue and Fri",
+  //   "every 2 weeks". Anything matched is removed from the title.
+  // ===========================================================================
+  const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  const WEEKDAY_WORDS = /\b(sundays?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sun|mon|tues?|wed|thur?s?|fri|sat)\b/gi;
+
+  function localISO(d){
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function todayISO(){ return localISO(new Date()); }
+  function addDays(iso, n){
+    const [y, m, d] = iso.split("-").map(Number);
+    return localISO(new Date(y, m - 1, d + n));
+  }
+  function weekdayOf(iso){
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).getDay();
+  }
+  function nextDateOnWeekdays(fromISO, days){
+    for(let i = 0; i < 7; i++){
+      const c = addDays(fromISO, i);
+      if(days.includes(weekdayOf(c))) return c;
+    }
+    return null;
+  }
+
+  function parseSchedule(text){
+    const lower = text.toLowerCase();
+    const today = todayISO();
+    let rest = text;
+    let dueDate = null;
+    let repeat = null;
+    const take = (re) => { const m = rest.match(re); if(m){ rest = rest.replace(m[0], " "); } return m; };
+
+    const everyWeeks = take(/\bevery\s+(\d+|two|three|four|five)\s+weeks?\b/i);
+    if(everyWeeks){
+      const words = { two: 2, three: 3, four: 4, five: 5 };
+      const weeks = words[everyWeeks[1].toLowerCase()] || parseInt(everyWeeks[1], 10);
+      repeat = { type: "every_weeks", weeks };
+      dueDate = today;
+    } else if(take(/\b(every\s+day|daily)\b/i)){
+      repeat = { type: "daily" };
+      dueDate = today;
+    } else if(/\b(every|weekly)\b/i.test(lower) || /\bweekdays?\b/i.test(lower)){
+      const days = [];
+      if(/\bweekdays?\b/i.test(lower)){ days.push(1, 2, 3, 4, 5); take(/\bevery\s+weekdays?\b|\bweekdays?\b/i); }
+      const names = [...rest.matchAll(WEEKDAY_WORDS)];
+      names.forEach(m => { const idx = WEEKDAY_INDEX[m[1].slice(0, 3).toLowerCase()]; if(idx !== undefined && !days.includes(idx)) days.push(idx); });
+      if(days.length){
+        names.forEach(m => { rest = rest.replace(m[0], " "); });
+        take(/\bevery\b|\bweekly\b|\bon\b/i);
+        repeat = { type: "weekly", days: days.sort((a, b) => a - b) };
+        dueDate = nextDateOnWeekdays(today, repeat.days);
+      }
+    }
+
+    if(!repeat){
+      if(take(/\btomorrow\b/i)) dueDate = addDays(today, 1);
+      else if(take(/\btoday\b/i)) dueDate = today;
+      else {
+        const single = [...rest.matchAll(WEEKDAY_WORDS)];
+        if(single.length){
+          const idx = WEEKDAY_INDEX[single[0][1].slice(0, 3).toLowerCase()];
+          rest = rest.replace(single[0][0], " ");
+          dueDate = nextDateOnWeekdays(today, [idx]);
+        }
+      }
+    }
+
+    rest = rest.replace(/\s+/g, " ").trim();
+    let prev;
+    do { prev = rest; rest = rest.replace(/\s+(on|and|every|at|by|the|next)$/i, "").trim(); } while(rest !== prev);
+    rest = rest.replace(/^(on|and|every)\s+/i, "");
+    return { rest, dueDate, repeat };
+  }
+
+  function nextOccurrence(repeat, fromISO){
+    if(!repeat) return null;
+    if(repeat.type === "daily") return addDays(fromISO, 1);
+    if(repeat.type === "every_weeks") return addDays(fromISO, 7 * repeat.weeks);
+    if(repeat.type === "weekly") return nextDateOnWeekdays(addDays(fromISO, 1), repeat.days);
+    return null;
+  }
+
+  function repeatLabel(repeat){
+    if(repeat.type === "daily") return "Every day";
+    if(repeat.type === "every_weeks") return `Every ${repeat.weeks} weeks`;
+    const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return "Every " + repeat.days.map(d => names[d]).join(", ");
+  }
+
+  function fmtDay(iso){
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  }
+
+  // Checking off a repeating task moves it to its next date instead of
+  // closing it, so a routine is never lost by being ticked.
+  function completeTask(id){
+    const task = state.tasks.find(t => t.id === id);
+    if(!task) return;
+    if(task.repeat){
+      const next = nextOccurrence(task.repeat, todayISO());
+      task.dueDate = next;
+      saveState();
+      remoteUpdateTask(id, { due_date: next });
+    } else {
+      task.status = "done";
+      task.completedAt = Date.now();
+      saveState();
+      remoteUpdateTask(id, { status: "done", completed_at: new Date().toISOString() });
+    }
+    renderAll();
+  }
+
+  function renderToday(){
+    const el = document.getElementById("todayArea");
+    const today = todayISO();
+    const due = state.tasks
+      .filter(t => t.status === "open" && t.dueDate && t.dueDate <= today)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.priority - b.priority);
+    if(!due.length){ el.hidden = true; el.innerHTML = ""; return; }
+    el.hidden = false;
+    const late = due.filter(t => t.dueDate < today).length;
+    el.innerHTML = `<div class="today-head"><span>Today</span><span class="today-count">${due.length} to do${late ? ` · ${late} late` : ""}</span></div>` +
+      due.map(t => `
+        <div class="today-row${t.dueDate < today ? " late" : ""}">
+          <button class="today-check" aria-label="Mark done" data-check="${t.id}"></button>
+          <div class="today-body">
+            <div class="today-title">${escapeHtml(t.title)}</div>
+            <div class="today-sub">${t.dueDate < today ? `Was due ${fmtDay(t.dueDate)}` : "Due today"}${t.repeat ? ` · ${repeatLabel(t.repeat)}` : ""}</div>
+          </div>
+        </div>`).join("");
+    el.querySelectorAll("[data-check]").forEach(btn => btn.addEventListener("click", () => completeTask(btn.dataset.check)));
   }
 
   function cleanTitle(text){
@@ -1510,6 +1669,8 @@
       taskType: parsed.taskType,
       roleTag: parsed.roleKey || null,
       projectId: projectMatch ? projectMatch.projectId : null,
+      dueDate: parsed.dueDate || null,
+      repeat: parsed.repeat || null,
       status: "open",
       priority: 2,
       source,
@@ -2048,12 +2209,8 @@
     doneBtn.className = "done";
     doneBtn.textContent = "✓ Mark done";
     doneBtn.addEventListener("click", () => {
-      task.status = "done";
-      task.completedAt = Date.now();
       delete state.shownTaskByBucket[activeBucket];
-      saveState();
-      remoteUpdateTask(task.id, { status: "done", completed_at: new Date().toISOString() });
-      renderAll();
+      completeTask(task.id);
     });
 
     const skipBtn = document.createElement("button");
@@ -2200,6 +2357,7 @@
   }
 
   function renderAll(){
+    renderToday();
     renderCounts();
     renderPickerActive();
     renderCard();
@@ -2754,6 +2912,11 @@
     }
   });
 })();
+</script>
+<script>
+if("serviceWorker" in navigator){
+  window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
+}
 </script>
 </body>
 </html>

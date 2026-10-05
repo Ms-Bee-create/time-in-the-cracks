@@ -251,3 +251,11 @@ drop trigger if exists on_ck_auth_user_created on auth.users;
 create trigger on_ck_auth_user_created
   after insert on auth.users
   for each row execute function public.ck_handle_new_user();
+
+-- Due dates and repeating tasks (Today screen).
+alter table public.ck_tasks add column if not exists due_date date;
+alter table public.ck_tasks add column if not exists repeat_rule jsonb;
+
+-- Due dates and repeating tasks (Today screen).
+alter table public.ck_tasks add column if not exists due_date date;
+alter table public.ck_tasks add column if not exists repeat_rule jsonb;
